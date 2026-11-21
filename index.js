@@ -1,98 +1,81 @@
-const express = require('express');
-const { MongoClient } = require('mongodb');
-const { context, metrics, trace } = require('@opentelemetry/api');
-const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
-const { performance } = require('node:perf_hooks');
-
+const { context } = require("@opentelemetry/api");
+const { logs, SeverityNumber } = require("@opentelemetry/api-logs");
+const express = require("express");
+const { MongoClient } = require("mongodb");
 const app = express();
-const client = new MongoClient(process.env.MONGO_URL || 'mongodb://127.0.0.1:27017');
-const port = Number(process.env.PORT || 3000);
-const logger = logs.getLogger('todo-list');
-const meter = metrics.getMeter('todo-list');
-const requests = meter.createCounter('todo.requests', { unit: '{request}' });
-const duration = meter.createHistogram('todo.request.duration', { unit: 'ms' });
+app.use(express.json());
+const port = 3000;
+let db;
+const logger = logs.getLogger("todo-service");
 
-async function startServer() {
-  await client.connect();
-  const todos = client.db('todo_lab').collection('todos');
-  await todos.bulkWrite([
-    {
-      updateOne: {
-        filter: { _id: 'review' },
-        update: { $setOnInsert: { title: 'Review OpenTelemetry', done: true } },
-        upsert: true,
-      },
-    },
-    {
-      updateOne: {
-        filter: { _id: 'trace' },
-        update: { $setOnInsert: { title: 'Inspect a Jaeger trace', done: false } },
-        upsert: true,
-      },
-    },
-  ]);
+const startServer = async () => {
+   const client = await MongoClient.connect(process.env.MONGO_URL || "mongodb://127.0.0.1:27017/");
+   db = client.db("todo");
 
-  app.get('/todo', async (_req, res) => {
-    const start = performance.now();
-    const requestContext = context.active();
-    const span = trace.getSpan(requestContext);
-    let itemCount = 0;
-    let error;
+   const seedTodos = [
+       {
+           id: "1",
+           title: "Buy groceries"
+       },
+       {
+           id: "2",
+           title: "Install Aspecto"
+       },
+       {
+           id: "3",
+           title: "buy my own name domain"
+       },
+   ];
+   await db.collection("todos").bulkWrite(seedTodos.map((todo) => ({
+       updateOne: {
+           filter: { id: todo.id },
+           update: { $setOnInsert: todo },
+           upsert: true,
+       },
+   })));
 
-    res.once('finish', () => {
-      const attributes = {
-        'http.request.method': 'GET',
-        'http.route': '/todo',
-        'http.response.status_code': res.statusCode,
-      };
-      requests.add(1, attributes);
-      duration.record(performance.now() - start, attributes);
-      logger.emit({
-        context: requestContext,
-        severityNumber: error ? SeverityNumber.ERROR : SeverityNumber.INFO,
-        severityText: error ? 'ERROR' : 'INFO',
-        body: error ? 'Could not list to-do items' : 'Listed to-do items',
-        attributes: error
-          ? { ...attributes, 'error.type': error.name }
-          : { ...attributes, 'todo.item_count': itemCount },
-      });
-    });
+   const server = app.listen(port, "127.0.0.1", () => {
+       console.log(`Example app listening on port ${port}`);
+   });
 
-    try {
-      const items = await todos.find().sort({ _id: 1 }).toArray();
-      itemCount = items.length;
-      res.json(items);
-    } catch (err) {
-      error = err;
-      span?.recordException(err);
-      res.status(500).json({ error: 'Could not list to-do items' });
-    }
-  });
+   const shutdown = () => server.close(async () => {
+       try {
+           await client.close();
+           await require("./tracing").shutdown();
+       } catch (error) {
+           console.error(error);
+           process.exitCode = 1;
+       }
+   });
+   process.once("SIGINT", shutdown);
+   process.once("SIGTERM", shutdown);
+};
 
-  const server = app.listen(port, '127.0.0.1', () => {
-    console.log('To-do API listening on http://127.0.0.1:' + port);
-  });
+startServer().catch((error) => {
+   console.error("Could not start the todo service", error);
+   process.exitCode = 1;
+});
 
-  async function shutdown() {
-    await new Promise((resolve) => server.close(resolve));
-    await client.close();
-    await require('./tracing').shutdown();
-  }
+app.get("/todo", async (req, res) => {
+   const requestContext = context.active();
+   const todos = await db.collection("todos").find({}).toArray();
+   res.once("finish", () => {
+       logger.emit({
+           context: requestContext,
+           severityNumber: SeverityNumber.INFO,
+           severityText: "INFO",
+           body: "Listed todos",
+           attributes: {
+               "http.route": "/todo",
+               "http.response.status_code": res.statusCode,
+               "todo.item_count": todos.length,
+           },
+       });
+   });
+   res.send(todos);
+});
 
-  function stop() {
-    shutdown().catch((err) => {
-      console.error(err);
-      process.exitCode = 1;
-    });
-  }
-
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-}
-
-startServer().catch(async (err) => {
-  console.error('Startup failed', err);
-  await client.close();
-  await require('./tracing').shutdown();
-  process.exitCode = 1;
+app.get("/todo/:id", async (req, res) => {
+   const todo = await db.collection("todos").findOne({ id: req.params.id });
+   res.send(todo);
 });

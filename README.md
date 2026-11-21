@@ -1,6 +1,6 @@
 # A9 Observability
 
-An Express endpoint reads two sample to-do items from MongoDB. OpenTelemetry records HTTP, Express, and MongoDB spans. The app also exports request metrics and structured logs to the terminal.
+The starter Express app reads three sample to-do items from MongoDB. OpenTelemetry records HTTP, Express, and MongoDB spans. The app also exports request metrics and structured logs to the terminal.
 
 ## Run locally
 
@@ -32,14 +32,16 @@ Remove-Item Env:TRACE_EXPORTER -ErrorAction SilentlyContinue
 npm start
 ```
 
-Call the endpoint again. Open [Jaeger](http://localhost:16686/), choose **todo-list** under **Service**, and click **Find Traces**. Open a **GET /todo** result to see the HTTP request, the Express route, and the MongoDB query in one timeline. Give the trace exporter a few seconds to send its batch.
+Call the endpoint again. Open [Jaeger](http://localhost:16686/), choose **todo-service** under **Service**, and click **Find Traces**. Open a **GET /todo** result to see the HTTP request, the Express route, and the MongoDB query in one timeline. Give the trace exporter a few seconds to send its batch.
 
 For bash or zsh, use `TRACE_EXPORTER=console npm start` for the first run, `npm start` for the OTLP run, and `curl` in place of `curl.exe`.
+
+Call `http://localhost:3000/todo/2` to exercise the starter’s single-item route.
 
 ## Telemetry
 
 - **Traces** go to Jaeger over OTLP/HTTP at `http://127.0.0.1:4318/v1/traces` by default.
-- **Metrics** include the `todo.requests` counter and the `todo.request.duration` histogram. The app exports them to the terminal every five seconds.
-- **Logs** record the result of each completed request, including its trace ID and the number of items returned on success.
+- **Metrics** include the HTTP server duration histogram and MongoDB connection pool measurements. The app exports them to the terminal every five seconds.
+- **Logs** record the result of each completed list request, including its trace ID and the number of items returned on success.
 
 Once finished, stop the app with Ctrl+C and run `docker stop a9-mongo a9-jaeger`. Use `docker start a9-mongo a9-jaeger` to run the same containers again.
